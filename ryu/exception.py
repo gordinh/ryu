@@ -1,5 +1,5 @@
-# Copyright (C) 2011 Nippon Telegraph and Telephone Corporation.
-# Copyright (C) 2011 Isaku Yamahata <yamahata at valinux co jp>
+# Copyright (C) 2014 Nippon Telegraph and Telephone Corporation.
+# Copyright (C) 2014 YAMAMOTO Takashi <yamamoto at valinux co jp>
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,51 +14,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-class RyuException(Exception):
-    message = 'An unknown exception'
-
-    def __init__(self, msg=None, **kwargs):
-        self.kwargs = kwargs
-        if msg is None:
-            msg = self.message
-
-        try:
-            msg = msg % kwargs
-        except Exception:
-            msg = self.message
-
-        super(RyuException, self).__init__(msg)
+from ryu import exception
 
 
-class OFPUnknownVersion(RyuException):
-    message = 'unknown version %(version)x'
+# base classes
+
+class _ExceptionBase(exception.RyuException):
+    def __init__(self, result):
+        self.result = result
+        super(_ExceptionBase, self).__init__(result=result)
 
 
-class OFPMalformedMessage(RyuException):
-    message = 'malformed message'
+class UnexpectedMultiReply(_ExceptionBase):
+    """Two or more replies are received for reply_muiti=False request."""
+
+    message = 'Unexpected Multi replies %(result)s'
 
 
-class NetworkNotFound(RyuException):
-    message = 'no such network id %(network_id)s'
+class OFError(_ExceptionBase):
+    """OFPErrorMsg is received."""
+
+    message = 'OpenFlow errors %(result)s'
 
 
-class NetworkAlreadyExist(RyuException):
-    message = 'network id %(network_id)s already exists'
+class InvalidDatapath(_ExceptionBase):
+    """Datapath is invalid.
 
+    This can happen when the bridge disconnects.
+    """
 
-class PortNotFound(RyuException):
-    message = 'no such port (%(dpid)s, %(port)s) in network %(network_id)s'
-
-
-class PortAlreadyExist(RyuException):
-    message = 'port (%(dpid)s, %(port)s) in network %(network_id)s ' \
-              'already exists'
-
-
-class PortUnknown(RyuException):
-    message = 'unknown network id for port (%(dpid)s %(port)s)'
-
-
-class MacAddressDuplicated(RyuException):
-    message = 'MAC address %(mac)s is duplicated'
+    message = 'Datapath Invalid %(result)s'

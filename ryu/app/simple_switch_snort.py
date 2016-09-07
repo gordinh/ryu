@@ -36,7 +36,7 @@ class SimpleSwitchSnort(app_manager.RyuApp):
     def __init__(self, *args, **kwargs):
         super(SimpleSwitchSnort, self).__init__(*args, **kwargs)
         self.snort = kwargs['snortlib']
-        self.snort_port = 3
+        self.snort_port = 3 # por padrao, todos os pacotes vão para a porta 3
         self.mac_to_port = {}
 
         socket_config = {'unixsock': True}
@@ -70,6 +70,7 @@ class SimpleSwitchSnort(app_manager.RyuApp):
         msg = ev.msg
 
         print('alertmsg: %s' % ''.join(msg.alertmsg))
+        # atacar aqui. Quando recebere uma img do tipo esperado, eu retiro ou bloqueio o endereço na tabela.
 
         self.packet_print(msg.pkt)
 
@@ -102,16 +103,18 @@ class SimpleSwitchSnort(app_manager.RyuApp):
                                 match=match, instructions=inst)
         datapath.send_msg(mod)
 
+
+# Este evento é gerado sempre, fica ocioso esperando receber pacotes
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         msg = ev.msg
-        datapath = msg.datapath
+        datapath = msg.datapath # http://ryu.readthedocs.io/en/latest/ryu_app_api.html#ryu-controller-controller-datapath
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
-        in_port = msg.match['in_port']
+        in_port = msg.match['in_port']  #porta que foi recebida a msg
 
-        pkt = packet.Packet(msg.data)
-        eth = pkt.get_protocols(ethernet.ethernet)[0]
+        pkt = packet.Packet(msg.data)  #dado da msg
+        eth = pkt.get_protocols(ethernet.ethernet)[0]  #protocols
 
         dst = eth.dst
         src = eth.src
@@ -121,20 +124,20 @@ class SimpleSwitchSnort(app_manager.RyuApp):
 
         # self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
 
-        # learn a mac address to avoid FLOOD next time.
-        self.mac_to_port[dpid][src] = in_port
+        # learn a mac address to avoid FLOOD next time.  />>
+        self.mac_to_port[dpid][src] = in_port  #fonte da msg
 
-        if dst in self.mac_to_port[dpid]:
-            out_port = self.mac_to_port[dpid][dst]
+        if dst in self.mac_to_port[dpid]:  # se dentro dessa lista tem o destinatario da msg
+            out_port = self.mac_to_port[dpid][dst]    # pego o destinatario e coloco como porta de saida
         else:
-            out_port = ofproto.OFPP_FLOOD
+            out_port = ofproto.OFPP_FLOOD  # se não eu coloco essa constante como porta de saida oq ser FPP_FLOOD
 
         actions = [parser.OFPActionOutput(out_port),
                    parser.OFPActionOutput(self.snort_port)]
 
         # install a flow to avoid packet_in next time
         if out_port != ofproto.OFPP_FLOOD:
-            match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
+            match = parser.OFPMatch(in_port=in_port, eth_dst=dst)  # oq ser isso
             self.add_flow(datapath, 1, match, actions)
 
         data = None
@@ -144,3 +147,10 @@ class SimpleSwitchSnort(app_manager.RyuApp):
         out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
                                   in_port=in_port, actions=actions, data=data)
         datapath.send_msg(out)
+
+## ideia geral
+    def remove_table_flows(self, datapath, table_id, match, instructions):
+        """Create OFP flow mod message to remove flows from table."""
+        ofproto = datapath.ofproto
+        flow_mod = datapath.ofproto_parser.OFPFlowMod(datapath, 0, 0 ,table_id , ofproto.OFPFC_DELETE,0, 0,1,ofproto.OFPCML_NO_BUFFER,ofproto.OFPP_ANY,OFPG_ANY, 0, match, instructions)
+        datapath.send_msg(flow_mod)
