@@ -1,3 +1,6 @@
+
+# -*- coding: utf-8 -*-
+
 # Copyright (C) 2013 Nippon Telegraph and Telephone Corporation.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -75,7 +78,7 @@ class SimpleSwitchSnort(app_manager.RyuApp):
         # atacar aqui. Quando recebere uma img do tipo esperado, eu retiro ou bloqueio o endereço na tabela.
         if msg.alertmsg == "DoS flood denial of service":  #http://ryu.readthedocs.io/en/latest/library_packet_ref.html
              mac_flood.append(msg.pkt.src_mac)
-             print " mac flood capturados"                              #https://osrg.github.io/ryu-book/en/html/packet_lib.html
+             print("mac flood capturados") #https://osrg.github.io/ryu-book/en/html/packet_lib.html
              self.remove_table_flows(datapath,2,empty_match,instructions)                 #http://ryu.readthedocs.io/en/latest/ofproto_v1_3_ref.html
              #(self, datapath, table_id, match, instructions):
         self.packet_print(msg.pkt)
