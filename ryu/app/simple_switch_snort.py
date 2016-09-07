@@ -38,7 +38,7 @@ class SimpleSwitchSnort(app_manager.RyuApp):
         self.snort = kwargs['snortlib']
         self.snort_port = 3 # por padrao, todos os pacotes vão para a porta 3
         self.mac_to_port = {}
-
+        self.mac_flood = []  # lista com mac de flood
         socket_config = {'unixsock': True}
 
         self.snort.set_config(socket_config)
@@ -68,10 +68,16 @@ class SimpleSwitchSnort(app_manager.RyuApp):
     @set_ev_cls(snortlib.EventAlert, MAIN_DISPATCHER)
     def _dump_alert(self, ev):
         msg = ev.msg
-
+        datapath = ev.msg.datapath
+        empty_match = parser.OFPMatch()
+        instructions = []
         print('alertmsg: %s' % ''.join(msg.alertmsg))
         # atacar aqui. Quando recebere uma img do tipo esperado, eu retiro ou bloqueio o endereço na tabela.
-
+        if msg.alertmsg == "DoS flood denial of service":  #http://ryu.readthedocs.io/en/latest/library_packet_ref.html
+             mac_flood.append(msg.pkt.src_mac)
+             print " mac flood capturados"                              #https://osrg.github.io/ryu-book/en/html/packet_lib.html
+             self.remove_table_flows(datapath,2,empty_match,instructions)                 #http://ryu.readthedocs.io/en/latest/ofproto_v1_3_ref.html
+             #(self, datapath, table_id, match, instructions):
         self.packet_print(msg.pkt)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -136,7 +142,7 @@ class SimpleSwitchSnort(app_manager.RyuApp):
                    parser.OFPActionOutput(self.snort_port)]
 
         # install a flow to avoid packet_in next time
-        if out_port != ofproto.OFPP_FLOOD:
+        if out_port != ofproto.OFPP_FLOOD:  #All physical ports, except the input port and those disabled by Spanning Tree Protocol.
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst)  # oq ser isso
             self.add_flow(datapath, 1, match, actions)
 
@@ -148,7 +154,7 @@ class SimpleSwitchSnort(app_manager.RyuApp):
                                   in_port=in_port, actions=actions, data=data)
         datapath.send_msg(out)
 
-## ideia geral
+## ideia geral  #https://github.com/FlowForwarding/lincx/blob/master/scripts/ryu/remove_flows_v1_3.py
     def remove_table_flows(self, datapath, table_id, match, instructions):
         """Create OFP flow mod message to remove flows from table."""
         ofproto = datapath.ofproto
