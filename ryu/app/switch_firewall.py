@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 
 # Copyright (C) 2013 Nippon Telegraph and Telephone Corporation.
@@ -30,24 +29,31 @@ from ryu.lib.packet import ethernet
 from ryu.lib.packet import ipv4
 from ryu.lib.packet import icmp
 from ryu.lib import snortlib
-
+from ryu.ofproto.ofproto_v1_3 import OFPG_ANY
+from mitigacao import *
 
 class SimpleSwitchSnort(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
     _CONTEXTS = {'snortlib': snortlib.SnortLib}
-
 
     def __init__(self, *args, **kwargs):
         super(SimpleSwitchSnort, self).__init__(*args, **kwargs)
         self.snort = kwargs['snortlib']
         self.snort_port = 3 # por padrao, todos os pacotes vão para a porta 3
         self.mac_to_port = {}
-        self.dictDatapath = {}#AQQQQUUUUUUUUUIIIIIII
         self.mac_flood = []  # lista com mac de flood
-        socket_config = {'unixsock': True}
+        self.dictDatapath = {}
+        self.mitigacao = mitigacao()
+        self.mac_flood = self.mitigacao.loadFile()
+        self.mac_white = self.mitigacao.loadWhiteFile()
+	socket_config = {'unixsock': False}
 
         self.snort.set_config(socket_config)
         self.snort.start_socket_server()
+
+    def get_package(self, pkt):
+        pkt = packet.Packet(array.array('B', pkt))
+	return pkt
 
     def packet_print(self, pkt):
         pkt = packet.Packet(array.array('B', pkt))
@@ -65,49 +71,36 @@ class SimpleSwitchSnort(app_manager.RyuApp):
         if eth:
             self.logger.info("%r", eth)
 
+	    return eth
 
-    def getEth(self, pkt):
-        return packet.Packet(array.array('B', pkt))
-
-        # for p in pkt.protocols:
-        #     if hasattr(p, 'protocol_name') is False:
-        #         break
-        #     print('p: %s' % p.protocol_name)
-
+        '''Function : _dump_alert
+        args: ev - pacote contendo a msg enviada pelo snort
+        Description: Função que ao receber os alertas encaminha esse pacote para a classe mitigacao
+        a qual ira dar o Tratamento necessario, de acordo com o a classe do ataque.
+        '''
     @set_ev_cls(snortlib.EventAlert, MAIN_DISPATCHER)
     def _dump_alert(self, ev):
-        msg = ev.msg
-        datapath = msg.datapath
-        empty_match = parser.OFPMatch()
-        instructions = []
-        mc = pkt.get_protocol(ethernet.ethernet).src
+       msg = ev.msg
+       self.mac_flood = self.mitigacao.checkmessenger(ev,self.mac_flood,self.dictDatapath,self.get_package(msg.pkt))
 
-
-        print('alertmsg: %s' % ''.join(msg.alertmsg))
-        # atacar aqui. Quando recebere uma img do tipo esperado, eu retiro ou bloqueio o endereço na tabela.
-        if msg.alertmsg == "DoS flood denial of service":  #http://ryu.readthedocs.io/en/latest/library_packet_ref.html
-             mac_flood.append(msg.pkt.src_mac)
-             print("mac flood capturados") #https://osrg.github.io/ryu-book/en/html/packet_lib.html
-             self.remove_table_flows(dictDatapath[mc][0], dictDatapath[mc][1], empty_match, instructions) #AQQQQUUUUUUUUUIIIIIII                 #http://ryu.readthedocs.io/en/latest/ofproto_v1_3_ref.html
-             #(self, datapath, table_id, match, instructions):
-             print mac_flood
-        self.packet_print(msg.pkt)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         datapath = ev.msg.datapath
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
+        msg = ev.msg
 
-cmd        #
+        # install table-miss flow entry
+        #
         # We specify NO BUFFER to max_len of the output action due to
         # OVS bug. At this moment, if we specify a lesser number, e.g.,
         # 128, OVS will send Packet-In with invalid buffer_id and
         # truncated packet data. In that case, we cannot output packets
         # correctly.
+
         match = parser.OFPMatch()
-        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
-                                          ofproto.OFPCML_NO_BUFFER)]
+       	actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions)
 
     def add_flow(self, datapath, priority, match, actions):
@@ -123,6 +116,14 @@ cmd        #
 
 
 # Este evento é gerado sempre, fica ocioso esperando receber pacotes
+    '''Function : _packet_in_handler
+    args: ev - Pacotes vindos de maquinas que querem se conectar a rede
+    Description: Função "principal", nela e que todas as maquinas que desejam se conectar a rede devem passar
+    Para tratamento dos pacotes, antes de enviar para o switch um pedido de criação de nova regra
+    e testado se aquele mac que quer se conectar a rede e um mac contido primeiramente na whitelist
+    e se ele não esta contido na blacklist
+    '''
+
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         msg = ev.msg
@@ -136,10 +137,14 @@ cmd        #
 
         dst = eth.dst
         src = eth.src
-
         dpid = datapath.id
         self.mac_to_port.setdefault(dpid, {})
-        self.dictDatapath[src] = [datapath, msg.table_id] #AQQQQUUUUUUUUUIIIIIII MAIS UM
+        
+        ''' dictDatapath -  Dicionario no qual eu associo o mac que esta buscando uma conexão
+        com seu datapath, table_id e Porta de entrada para que quando o mesmo mac vier a atacar
+         o switch eu consigo obter todas essas informações a partir do mac dele'''
+
+	    self.dictDatapath[src] = [datapath, msg.table_id, in_port]
         # self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
 
         # learn a mac address to avoid FLOOD next time.  />>
@@ -153,23 +158,22 @@ cmd        #
         actions = [parser.OFPActionOutput(out_port),
                    parser.OFPActionOutput(self.snort_port)]
 
-        # install a flow to avoid packet_in next time
-        if out_port != ofproto.OFPP_FLOOD:  #All physical ports, except the input port and those disabled by Spanning Tree Protocol.
-            match = parser.OFPMatch(in_port=in_port, eth_dst=dst)  # oq ser isso
-            self.add_flow(datapath, 1, match, actions)
 
-        data = None
-        if msg.buffer_id == ofproto.OFP_NO_BUFFER:
-            data = msg.data
 
-        out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                                  in_port=in_port, actions=actions, data=data)
-        datapath.send_msg(out)
+	if src in self.mac_white:
+        	if src not in self.mac_flood and dst not in self.mac_flood:
+			    print ('Criando regra de fluxo...')
+		        if out_port != ofproto.OFPP_FLOOD:  #All physical ports, except the input port and those disabled by Spanning Tree Protocol.
+			        match = parser.OFPMatch(in_port=in_port, eth_dst=dst)  # oq ser isso
+        			self.add_flow(datapath, 1, match, actions)
 
-## ideia geral  #https://github.com/FlowForwarding/lincx/blob/master/scripts/ryu/remove_flows_v1_3.py
+               		data = None
+            		if msg.buffer_id == ofproto.OFP_NO_BUFFER:
+               			data = msg.data
 
-    def remove_table_flows(self, datapath, table_id, match, instructions):
-        """Create OFP flow mod message to remove flows from table."""
-        ofproto = datapath.ofproto
-        flow_mod = datapath.ofproto_parser.OFPFlowMod(datapath, 0, 0 ,table_id , ofproto.OFPFC_DELETE,0, 0,1,ofproto.OFPCML_NO_BUFFER,ofproto.OFPP_ANY,OFPG_ANY, 0, match, instructions)
-        datapath.send_msg(flow_mod)
+               		out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,in_port=in_port, actions=actions, data=data)
+    	      		datapath.send_msg(out)
+		#else:
+			#print(' Packet_in nao atendido - MAC Suspeito! ')
+	#else:
+		#print(' MAC nao cadastrao - Contate o Administrador! ')
